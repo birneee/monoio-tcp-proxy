@@ -1,7 +1,7 @@
 use std::cmp::min;
 use std::time::Duration;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
-use log::info;
+use log::{error, info};
 use monoio::{RuntimeBuilder, spawn, FusionDriver, Runtime, FusionRuntime, IoUringDriver, LegacyDriver, select, BufResult};
 use monoio::buf::Slice;
 use monoio::io::{AsyncReadRent, AsyncWriteRent, AsyncWriteRentExt};
@@ -73,7 +73,13 @@ fn setup_server_and_proxy(
                         let to_send = min(buf.len(), num_bytes - bytes_sent);
                         let (res, slice) = socket.write(Slice::new(buf, 0, to_send)).await;
                         buf = slice.into_inner();
-                        bytes_sent += res.unwrap();
+                        bytes_sent += match res {
+                            Ok(n) => n,
+                            Err(err) => {
+                                error!("socket write failed: {err}");
+                                return
+                            }
+                        }
                     }
                     socket.shutdown().await.unwrap();
                 });
@@ -85,6 +91,9 @@ fn setup_server_and_proxy(
             let args = Args {
                 bind: proxy_addr,
                 target: server_addr,
+                recv_buf: None,
+                send_buf: None,
+                congestion_controller: None,
             };
             run_proxy(args).await;
         });
