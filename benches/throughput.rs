@@ -2,12 +2,12 @@ use std::cmp::min;
 use std::time::Duration;
 use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use log::{error, info};
-use monoio::{RuntimeBuilder, spawn, FusionDriver, Runtime, FusionRuntime, IoUringDriver, LegacyDriver, select, BufResult};
+use monoio::{RuntimeBuilder, spawn, FusionDriver, FusionRuntime, IoUringDriver, LegacyDriver};
 use monoio::buf::Slice;
-use monoio::io::{AsyncReadRent, AsyncWriteRent, AsyncWriteRentExt};
+use monoio::io::{AsyncReadRent, AsyncWriteRent};
 use monoio::net::{TcpListener, TcpStream};
 use monoio::time::{sleep, TimeDriver};
-use monoio_tcp_proxy::{run_proxy, Args};
+use monoio_tcp_proxy::{run_proxy, Args, DEFAULT_COPY_BUF};
 
 criterion_group!(
     name = benches;
@@ -30,7 +30,7 @@ fn targets(c: &mut Criterion) {
     let num_bytes = 1E9 as usize;
 
     // Spawn server + proxy ONCE, keep addresses
-    let (server_addr, proxy_addr) = setup_server_and_proxy(&mut rt, num_bytes);
+    let (_server_addr, proxy_addr) = setup_server_and_proxy(&mut rt, num_bytes);
 
     g.throughput(Throughput::Bytes(num_bytes as u64));
     g.bench_function("transmit-1G", |b| b.iter(|| transmit(num_bytes, proxy_addr, &mut rt)));
@@ -94,6 +94,7 @@ fn setup_server_and_proxy(
                 recv_buf: None,
                 send_buf: None,
                 congestion_controller: None,
+                copy_buf: DEFAULT_COPY_BUF,
             };
             run_proxy(args).await;
         });

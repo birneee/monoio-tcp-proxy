@@ -4,10 +4,15 @@ use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::str::FromStr;
 use clap::Parser;
-use monoio::io::{AsyncReadRent, AsyncWriteRent, AsyncWriteRentExt, Splitable};
+use monoio::io::Splitable;
 use monoio::net::{TcpListener, TcpStream};
 use log::{debug, error, info};
 use nix::sys::socket::sockopt;
+use crate::copy::copy;
+
+mod copy;
+
+pub const DEFAULT_COPY_BUF: usize = 128 * 1024;
 
 #[derive(Parser)]
 pub struct Args {
@@ -15,12 +20,14 @@ pub struct Args {
     pub bind: net::SocketAddr,
     #[arg(long, help = "e.g. 1.2.3.4:80", value_name = "HOST:PORT")]
     pub target: net::SocketAddr,
-    #[arg(long, help = "TCP receive buffer size in", value_name = "BYTES")]
+    #[arg(long, help = "TCP receive buffer size", value_name = "BYTES")]
     pub recv_buf: Option<usize>,
-    #[arg(long, help = "TCP send buffer size in", value_name = "BYTES")]
+    #[arg(long, help = "TCP send buffer size", value_name = "BYTES")]
     pub send_buf: Option<usize>,
     #[arg(long = "cc", help = "Which system TCP congestion controller to use", value_name = "NAME")]
     pub congestion_controller: Option<String>,
+    #[arg(long, help = "Copy buffer size", value_name = "BYTES", default_value_t = DEFAULT_COPY_BUF)]
+    pub copy_buf: usize,
 }
 
 fn configure_socket(socket: &TcpStream, args: &Args) {
@@ -105,32 +112,10 @@ pub async fn run_proxy(args: Args) {
             let (mut in_r, mut in_w) = in_conn.into_split();
             let (mut out_r, mut out_w) = out_conn.into_split();
             let _ = monoio::join!(
-                        copy_one_direction(&mut in_r, &mut out_w),
-                        copy_one_direction(&mut out_r, &mut in_w),
+                        copy(&mut in_r, &mut out_w, args.copy_buf),
+                        copy(&mut out_r, &mut in_w, args.copy_buf),
                     );
             info!("{relay_name}: close");
         });
-    }
-}
-
-pub async fn copy_one_direction<FROM: AsyncReadRent, TO: AsyncWriteRent>(
-    mut from: FROM,
-    to: &mut TO,
-) -> Result<Vec<u8>, std::io::Error> {
-    let mut buf = Vec::with_capacity(8 * 1024);
-    let mut res;
-    loop {
-        // read
-        (res, buf) = from.read(buf).await;
-        if res? == 0 {
-            return Ok(buf);
-        }
-
-        // write all
-        (res, buf) = to.write_all(buf).await;
-        res?;
-
-        // clear
-        buf.clear();
     }
 }
